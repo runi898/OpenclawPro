@@ -1,0 +1,56 @@
+{
+  "name": "openclaw-tools",
+  "version": "1.0.0",
+  "description": "OpenClaw Pro 控制中心 - 桌面端命令执行助手",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron . --disable-gpu --no-sandbox",
+    "smoke": "node smoke-test.js",
+    "build": "electron-builder --win"
+  },
+  "keywords": [
+    "openclaw",
+    "electron",
+    "tools"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "electron": "^41.0.2",
+    "electron-builder": "^26.0.0",
+    "node-pty": "^1.1.0"
+  },
+  "dependencies": {
+    "https-proxy-agent": "^7.0.6",
+    "iconv-lite": "^0.7.2",
+    "qrcode": "^1.5.4",
+    "socks-proxy-agent": "^8.0.5"
+  },
+  "build": {
+    "appId": "com.openclaw.tools",
+    "productName": "OpenClaw Pro",
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "include": "build/installer.nsh"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/.cache/**"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "asarUnpack": [
+      "npm-dashboard-runner.*"
+    ]
+  }
+}

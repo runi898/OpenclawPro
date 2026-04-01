@@ -1,0 +1,31 @@
+# 依赖
+node_modules/
+package-lock.json
+pnpm-lock.yaml
+
+# 构建输出
+dist/
+out/
+*.exe
+
+# 编辑器/系统
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+Desktop.ini
+
+# Electron
+.electron/
+
+# 临时
+tmp-clawx/
+*.log
+
+# Agent 产物
+.gemini/
+
+# 反馈目录（由各 worktree 动态写入，不跟踪）
+task/feedback/*.md
+!task/feedback/.gitkeep

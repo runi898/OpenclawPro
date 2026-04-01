@@ -1,0 +1,13 @@
+{
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix OpenClaw-Tools start",
+    "smoke": "node OpenClaw-Tools/smoke-test.js"
+  },
+  "devDependencies": {
+    "electron": "^41.0.2"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.7.2"
+  }
+}
