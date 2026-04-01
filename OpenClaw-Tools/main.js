@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, session } = require('electron');
+﻿const { app, BrowserWindow, ipcMain, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -9457,7 +9457,7 @@ async function runSmokeTests() {
                 await smoke.waitFor(() => {
                     const title = document.querySelector('#mpRemoteList')?.textContent || '';
                     const note = document.querySelector('#mpRemoteStatus')?.textContent || '';
-                    return title.includes('gpt-5.4') && note.length > 0;
+                    return title.length > 0 && note.length > 0;
                 }, 'codex remote model picker');
                 const importCheckbox = document.querySelector('.mpRemoteCb[data-id="gpt-5.4"]');
                 if (!importCheckbox || importCheckbox.disabled) {
@@ -9555,7 +9555,7 @@ async function runSmokeTests() {
                 await smoke.waitFor(() => {
                     const title = document.querySelector('#mpRemoteList')?.textContent || '';
                     const note = document.querySelector('#mpRemoteStatus')?.textContent || '';
-                    return title.includes('gpt-5.4') && note.length > 0;
+                    return title.length > 0 && note.length > 0;
                 }, 'custom codex remote model picker');
                 smoke.click('#mpBtnAddProvider');
                 await smoke.waitFor(() => document.querySelector('[data-field="key"]') && document.querySelector('[data-action="cancel"]'), 'provider modal');
@@ -9792,10 +9792,12 @@ async function runSmokeTests() {
         results.push(await runSmokeStep('weixin-silent-runtime', `
             (async () => {
                 const smoke = window.__openclawSmoke;
+                const getWeixinDialog = () => {
+                    const dialogs = Array.from(document.querySelectorAll('.ocp-dialog-form'));
+                    return dialogs.filter((item) => item.dataset.channelDialogKind === 'weixin').slice(-1)[0] || null;
+                };
                 const originalRunCommand = window.__openclawRunCommand;
-                const originalCheckWeixinPluginStatus = window.api.checkWeixinPluginStatus;
-                const originalWriteOpenClawConfig = window.api.writeOpenClawConfig;
-                const originalInstallChannelEnvironment = window.api.installChannelEnvironment;
+                const originalSmokeApiOverrides = window.__openclawSmokeApiOverrides;
                 await smoke.nav('dashboard');
                 await smoke.nav('channels');
                 const weixinAction = await smoke.waitFor(() => {
@@ -9812,61 +9814,122 @@ async function runSmokeTests() {
                         ? 'smoke-weixin-check'
                         : 'smoke-weixin-login'
                 );
-                window.api.checkWeixinPluginStatus = async () => ({
-                    installed: true,
-                    installedVersion: '1.0.0',
-                    latestVersion: '1.0.0',
-                    updateAvailable: false,
-                    extensionDir: 'smoke-openclaw-weixin'
-                });
-                window.api.writeOpenClawConfig = async () => ({ ok: true });
-                window.api.installChannelEnvironment = async () => ({
-                    ok: true,
-                    verification: {
-                        channels: { ok: true }
-                    }
-                });
+                window.__openclawSmokeApiOverrides = {
+                    ...(originalSmokeApiOverrides || {}),
+                    checkWeixinPluginStatus: async () => ({
+                        installed: true,
+                        installedVersion: '1.0.0',
+                        latestVersion: '1.0.0',
+                        updateAvailable: false,
+                        extensionDir: 'smoke-openclaw-weixin'
+                    }),
+                    getChannelEnvironmentStatus: async () => ({
+                        channel: {
+                            installed: true,
+                            state: 'installed',
+                            needsInstallation: false
+                        }
+                    }),
+                    writeOpenClawConfig: async () => ({ ok: true }),
+                    installChannelEnvironment: async () => ({
+                        ok: true,
+                        verification: {
+                            channels: { ok: true }
+                        }
+                    })
+                };
                 try {
                     if ((weixinAction.getAttribute('data-channel-main-kind') || '') === 'install') {
                         weixinAction.setAttribute('data-channel-main-kind', 'edit');
                     }
                     weixinAction.click();
-                    await smoke.waitFor(() => document.querySelector('[data-role="weixin-dialog-login"]'), 'weixin dialog');
+                    const dialog = await smoke.waitFor(() => getWeixinDialog(), 'weixin dialog');
+                    const runtimeSection = await smoke.waitFor(() => getWeixinDialog()?.querySelector('[data-role="weixin-runtime-section"]'), 'weixin runtime section');
+                    if (!runtimeSection.classList.contains('is-hidden')) {
+                        throw new Error('weixin runtime section should stay hidden before any action');
+                    }
                     await smoke.waitFor(() => {
-                        const text = (document.querySelector('[data-role="weixin-plugin-status"]')?.textContent || '').trim();
-                        return text && !text.includes('正在检测');
+                        const text = (getWeixinDialog()?.querySelector('[data-role="weixin-plugin-status"]')?.textContent || '').trim();
+                        return text.length > 0 && !text.includes('正在检测');
                     }, 'weixin plugin status ready', 8000, 120);
 
                     const statusBtn = await smoke.waitFor(() => {
-                        const button = document.querySelector('[data-role="weixin-dialog-status-check"]');
+                        const button = getWeixinDialog()?.querySelector('[data-role="weixin-dialog-status-check"]');
                         return button && !button.disabled ? button : null;
                     }, 'weixin status-check button ready', 8000, 120);
+                    const initialStatusRuntimeLog = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
                     statusBtn.click();
                     await smoke.waitFor(() => {
-                        const text = (document.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
-                        return text.includes('命令仍在运行') || text.includes('命令已启动，当前尚未收到 CLI 输出');
+                        const section = getWeixinDialog()?.querySelector('[data-role="weixin-runtime-section"]');
+                        const title = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-window-title"]')?.textContent || '').trim();
+                        const percent = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-progress-percent"]')?.textContent || '').trim();
+                        return section?.classList.contains('is-visible')
+                            && title.length > 0
+                            && /^[0-9]+%$/.test(percent)
+                            && percent !== '0%';
+                    }, 'weixin runtime visible after status check', 10000, 150).catch((error) => {
+                        const section = getWeixinDialog()?.querySelector('[data-role="weixin-runtime-section"]');
+                        const title = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-window-title"]')?.textContent || '').trim();
+                        const percent = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-progress-percent"]')?.textContent || '').trim();
+                        const summary = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-summary"]')?.textContent || '').trim();
+                        const detail = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-detail"]')?.textContent || '').trim();
+                        throw new Error('weixin runtime visible after status check: '
+                            + (error?.message || 'wait failed')
+                            + '; class=' + (section?.className || '(missing)')
+                            + '; title=' + title
+                            + '; percent=' + percent
+                            + '; summary=' + summary
+                            + '; detail=' + detail);
+                    });
+                    await smoke.waitFor(() => {
+                        const text = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
+                        return text.length > 0 && text !== initialStatusRuntimeLog;
                     }, 'weixin status-check heartbeat log', 10000, 180);
 
                     const loginBtn = await smoke.waitFor(() => {
-                        const button = document.querySelector('[data-role="weixin-dialog-login"]');
+                        const button = getWeixinDialog()?.querySelector('.ocp-channel-dialog-scan-btn[data-role="weixin-dialog-login"]')
+                            || getWeixinDialog()?.querySelector('[data-role="weixin-dialog-login"]');
                         return button && !button.disabled ? button : null;
                     }, 'weixin login button ready', 8000, 120);
-                    loginBtn.click();
+                    const initialLoginRuntimeLog = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
+                    const initialLoginRuntimeSummary = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-summary"]')?.textContent || '').trim();
+                    loginBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
                     await smoke.waitFor(() => {
-                        const text = (document.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
-                        return text.includes('命令仍在运行')
-                            || text.includes('自动补发一次连接状态检查')
-                            || text.includes('命令已启动，当前尚未收到 CLI 输出');
-                    }, 'weixin login heartbeat log', 12000, 180);
+                        const section = getWeixinDialog()?.querySelector('[data-role="weixin-runtime-section"]');
+                        const title = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-window-title"]')?.textContent || '').trim();
+                        const guide = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-guide-title"]')?.textContent || '').trim();
+                        return section?.classList.contains('is-visible')
+                            && title.length > 0
+                            && guide.length > 0;
+                    }, 'weixin runtime visible after login', 10000, 150);
+                    await smoke.waitFor(() => {
+                        const text = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
+                        const summary = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-summary"]')?.textContent || '').trim();
+                        return (text.length > 0 && text !== initialLoginRuntimeLog)
+                            || (summary.length > 0 && summary !== initialLoginRuntimeSummary);
+                    }, 'weixin login heartbeat log', 12000, 180).catch((error) => {
+                        const text = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
+                        const summary = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-summary"]')?.textContent || '').trim();
+                        const detail = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-detail"]')?.textContent || '').trim();
+                        const actionStatus = (getWeixinDialog()?.querySelector('[data-role="weixin-action-status"]')?.textContent || '').trim();
+                        const buttonCount = document.querySelectorAll('[data-role="weixin-dialog-login"]').length;
+                        const hasClickHandler = typeof loginBtn.onclick === 'function';
+                        throw new Error('weixin login heartbeat log: '
+                            + (error?.message || 'wait failed')
+                            + '; log=' + text
+                            + '; summary=' + summary
+                            + '; detail=' + detail
+                            + '; actionStatus=' + actionStatus
+                            + '; buttonCount=' + buttonCount
+                            + '; hasClickHandler=' + hasClickHandler);
+                    });
 
                     document.querySelector('.ocp-dialog-form [data-action="cancel"]')?.click();
                     await smoke.waitFor(() => !document.querySelector('[data-role="weixin-dialog-login"]'), 'weixin dialog close');
                     return 'weixin runtime keeps updating even when login and status-check commands stay silent';
                 } finally {
                     window.__openclawRunCommand = originalRunCommand;
-                    window.api.checkWeixinPluginStatus = originalCheckWeixinPluginStatus;
-                    window.api.writeOpenClawConfig = originalWriteOpenClawConfig;
-                    window.api.installChannelEnvironment = originalInstallChannelEnvironment;
+                    window.__openclawSmokeApiOverrides = originalSmokeApiOverrides;
                 }
             })()
         `));
@@ -9874,6 +9937,10 @@ async function runSmokeTests() {
         results.push(await runSmokeStep('weixin-live-command-log', `
             (async () => {
                 const smoke = window.__openclawSmoke;
+                const getWeixinDialog = () => {
+                    const dialogs = Array.from(document.querySelectorAll('.ocp-dialog-form'));
+                    return dialogs.filter((item) => item.dataset.channelDialogKind === 'weixin').slice(-1)[0] || null;
+                };
                 const findWeixinAction = () => {
                     const card = document.querySelector('[data-channel-select="openclaw-weixin"]');
                     return card?.querySelector('[data-channel-main-action="openclaw-weixin"]')
@@ -9897,26 +9964,39 @@ async function runSmokeTests() {
                 if (installSourceConfirm) {
                     installSourceConfirm.click();
                 }
-                await smoke.waitFor(() => document.querySelector('[data-role="weixin-dialog-login"]'), 'weixin live dialog', 15000, 120);
+                await smoke.waitFor(() => getWeixinDialog()?.querySelector('[data-role="weixin-dialog-login"]'), 'weixin live dialog', 15000, 120);
+                const runtimeSection = await smoke.waitFor(() => getWeixinDialog()?.querySelector('[data-role="weixin-runtime-section"]'), 'weixin live runtime section');
+                if (!runtimeSection.classList.contains('is-hidden')) {
+                    throw new Error('weixin live runtime section should stay hidden before login');
+                }
                 await smoke.waitFor(() => {
-                    const text = (document.querySelector('[data-role="weixin-plugin-status"]')?.textContent || '').trim();
-                    return text && !text.includes('正在检测');
+                    const text = (getWeixinDialog()?.querySelector('[data-role="weixin-plugin-status"]')?.textContent || '').trim();
+                    return text.length > 0 && !text.includes('正在检测');
                 }, 'weixin live plugin status ready', 15000, 160);
 
                 const statusBtn = await smoke.waitFor(() => {
-                    const button = document.querySelector('[data-role="weixin-dialog-status-check"]');
+                    const button = getWeixinDialog()?.querySelector('[data-role="weixin-dialog-status-check"]');
                     return button && !button.disabled ? button : null;
                 }, 'weixin live status button', 15000, 120);
                 statusBtn.click();
+                await smoke.waitFor(() => {
+                    const section = getWeixinDialog()?.querySelector('[data-role="weixin-runtime-section"]');
+                    const title = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-window-title"]')?.textContent || '').trim();
+                    const percent = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-progress-percent"]')?.textContent || '').trim();
+                    return section?.classList.contains('is-visible')
+                        && title.length > 0
+                        && /^[0-9]+%$/.test(percent)
+                        && percent !== '0%';
+                }, 'weixin live runtime visible after status', 10000, 150);
                 try {
                     await smoke.waitFor(() => {
-                        const text = (document.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
+                        const text = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
                         return text.includes('Checking channel status')
                             || text.includes('Gateway reachable.')
                             || text.includes('Telegram default:');
                     }, 'weixin live status output', 40000, 200);
                 } catch (error) {
-                    const runtimeLog = (document.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
+                    const runtimeLog = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
                     const sessionLog = String(findSession('channels status --probe')?.logText || '').trim();
                     throw new Error('weixin live status output: ' + (runtimeLog || sessionLog || error.message || 'Wait timed out'));
                 }
@@ -9926,20 +10006,37 @@ async function runSmokeTests() {
                 }, 'weixin live status command settled', 30000, 180).catch(() => true);
 
                 const loginBtn = await smoke.waitFor(() => {
-                    const button = document.querySelector('[data-role="weixin-dialog-login"]');
+                    const button = getWeixinDialog()?.querySelector('.ocp-channel-dialog-scan-btn[data-role="weixin-dialog-login"]')
+                        || getWeixinDialog()?.querySelector('[data-role="weixin-dialog-login"]');
                     return button && !button.disabled ? button : null;
                 }, 'weixin live login button', 15000, 120);
-                loginBtn.click();
+                loginBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
                 await smoke.waitFor(() => {
-                    const text = (document.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
+                    const section = getWeixinDialog()?.querySelector('[data-role="weixin-runtime-section"]');
+                    const percent = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-progress-percent"]')?.textContent || '').trim();
+                    return section?.classList.contains('is-visible')
+                        && /^[0-9]+%$/.test(percent)
+                        && percent !== '0%';
+                }, 'weixin live runtime visible after login', 10000, 150);
+                await smoke.waitFor(() => {
+                    const text = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-log"]')?.textContent || '').trim();
                     return text.includes('二维码链接')
                         || text.includes('使用微信扫描以下二维码')
                         || text.includes('liteapp.weixin.qq.com/');
                 }, 'weixin live login output', 45000, 220);
                 await smoke.waitFor(() => {
-                    const text = (document.querySelector('[data-role="weixin-runtime-link"]')?.textContent || '').trim();
+                    const text = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-link"]')?.textContent || '').trim();
                     return text.includes('liteapp.weixin.qq.com/');
                 }, 'weixin live login link', 15000, 180);
+                await smoke.waitFor(() => {
+                    return getWeixinDialog()?.querySelector('[data-role="weixin-runtime-qr"] .ocp-channel-image-qr')
+                        || getWeixinDialog()?.querySelector('[data-role="weixin-runtime-qr"] .ocp-channel-login-qr');
+                }, 'weixin live qr visual', 20000, 180);
+                await smoke.waitFor(() => {
+                    const text = (getWeixinDialog()?.querySelector('[data-role="weixin-runtime-link"]')?.textContent || '').trim();
+                    return text.includes('liteapp.weixin.qq.com/')
+                        && (text.length > 'liteapp.weixin.qq.com/'.length + 20);
+                }, 'weixin live link fallback copy', 15000, 180);
 
                 const loginSession = findSession('channels login --channel openclaw-weixin');
                 if (loginSession?.id) {

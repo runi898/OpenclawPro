@@ -204,29 +204,80 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
         return null;
     }
 
+    const WEIXIN_LOG_NOISE_PATTERNS = [
+        /^\[plugins\] plugins\.allow is empty/i,
+        /^\[plugins\] feishu_(?:doc|chat|wiki|drive|bitable):/i,
+        /^\[plugins\].*Registered/i,
+        /^\[qqbot-channel-api\]/i,
+        /^\[qqbot-remind\]/i,
+        /^\[系统\] 命令已启动，但当前 CLI 还没有输出日志；界面会继续等待后续结果。$/i,
+        /^\[状态检查\] 命令仍在运行，已等待 .+?；当前尚未返回新的 CLI 输出。$/i,
+        /^\[扫码登录\] 命令仍在运行，已等待 .+?；当前尚未输出二维码或链接。$/i
+    ];
+
+    function isWeixinNoiseLogLine(line = '') {
+        const value = String(line || '').trim();
+        if (!value) return true;
+        return WEIXIN_LOG_NOISE_PATTERNS.some((pattern) => pattern.test(value));
+    }
+
     function buildWeixinLogDigest(logText = '') {
         const source = String(logText || '');
         if (!source.trim()) return '';
-        const noisePatterns = [
-            /^\[plugins\] feishu_(?:doc|chat|wiki|drive|bitable):/i,
-            /^\[qqbot-channel-api\]/i,
-            /^\[qqbot-remind\]/i,
-            /^\[系统\] 命令已启动，但当前 CLI 还没有输出日志；界面会继续等待后续结果。$/i,
-            /^\[状态检查\] 命令仍在运行，已等待 .+?；当前尚未返回新的 CLI 输出。$/i,
-            /^\[扫码登录\] 命令仍在运行，已等待 .+?；当前尚未输出二维码或链接。$/i
-        ];
         const digestLines = [];
         for (const rawLine of source.split(/\r?\n/)) {
             const line = String(rawLine || '').trim();
             if (!line) continue;
             if (/^[\u2580\u2584\u2588 ]+$/.test(line)) continue;
             if (line.includes('liteapp.weixin.qq.com')) continue;
-            if (noisePatterns.some((pattern) => pattern.test(line))) continue;
+            if (isWeixinNoiseLogLine(line)) continue;
             if (digestLines[digestLines.length - 1] === line) continue;
             digestLines.push(line);
         }
         if (!digestLines.length) return '';
         return digestLines.slice(-12).join('\n');
+    }
+
+    function buildWeixinUserFacingRuntimeLog(logText = '', options = {}) {
+        const source = String(logText || '').trim();
+        const digest = buildWeixinLogDigest(source);
+        if (digest) return digest;
+
+        const runtimeActive = options.runtimeActive === true;
+        const elapsedMs = Math.max(0, Number(options.elapsedMs || 0));
+        const phase = String(options.phase || '').trim();
+
+        if (source) {
+            const meaningfulLine = source
+                .split(/\r?\n/)
+                .map((line) => String(line || '').trim())
+                .find((line) => line && !isWeixinNoiseLogLine(line));
+            if (meaningfulLine) return meaningfulLine;
+
+            if (runtimeActive) {
+                if (phase === 'checking') {
+                    return '当前只收到启动级日志，状态检查命令仍在运行；这不是页面卡住，请等待状态结果返回。';
+                }
+                if (elapsedMs >= 5000) {
+                    return '当前只收到插件启动日志，CLI 还没有回显二维码或链接；这不是页面卡住，可以稍等几秒，或直接点击“检查状态”。';
+                }
+                return '扫码命令已经启动，但目前只收到插件启动日志；二维码通常会稍后出现在这里。';
+            }
+
+            return '当前日志里只有插件启动信息，还没有出现可用于扫码或状态确认的结果。';
+        }
+
+        if (runtimeActive) {
+            if (phase === 'checking') {
+                return '状态检查命令已发出，正在等待返回结果...';
+            }
+            if (elapsedMs >= 5000) {
+                return '命令仍在运行，但 CLI 暂时没有回显二维码或链接；这不是页面卡住，可以继续等待或点击“检查状态”。';
+            }
+            return '命令已经启动，正在等待 CLI 输出二维码、链接或确认状态...';
+        }
+
+        return '';
     }
 
     function isWeixinBindingCompleteFromState(state, channelName) {
@@ -1373,7 +1424,7 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
         };
     }
 
-    function renderChannelStateCards(state, channelName, options = {}) {
+    function getChannelStateDescriptors(state, channelName, options = {}) {
         const profile = options.profile || getChannelProfile(channelName, options.channelConfig || state.config?.channels?.[channelName]);
         const channelConfig = ensureObject(options.channelConfig || state.config?.channels?.[channelName]);
         const probe = ensureObject(options.probe || getChannelAccessProbe(state, channelName));
@@ -1382,24 +1433,52 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             channelConfig,
             probe
         });
-        const cards = [
+        return [
             describeChannelInstalledState(actionState, probe),
             describeChannelConfiguredState(channelName, channelConfig, actionState),
             describeChannelConnectionState(state, channelName, channelConfig, actionState, probe)
         ];
+    }
+
+    function renderChannelStatusGrid(items, options = {}) {
+        const list = ensureArray(items).filter(Boolean);
+        if (!list.length) return '';
+        const extraClass = options.compact ? ' is-compact' : '';
         return `
-            <div class="ocp-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
-                ${cards.map((card) => `
-                    <div class="ocp-card" style="padding:14px 16px;display:flex;flex-direction:column;gap:8px">
-                        <div class="ocp-row-meta">${esc(card.label)}</div>
-                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                            <span class="ocp-pill ${card.tone}">${esc(card.value)}</span>
-                            <span class="ocp-row-meta">${esc(card.detail)}</span>
-                        </div>
+            <div class="ocp-channel-status-grid${extraClass}">
+                ${list.map((item) => `
+                    <div class="ocp-channel-status-item tone-${esc(item.tone || 'muted')}">
+                        <div class="ocp-channel-status-label">${esc(item.label || '')}</div>
+                        <div class="ocp-channel-status-value">${esc(item.value || '')}</div>
+                        <div class="ocp-channel-status-detail">${esc(item.detail || '')}</div>
                     </div>
                 `).join('')}
             </div>
         `;
+    }
+
+    function buildChannelDialogContextBlock(items, options = {}) {
+        const list = ensureArray(items).filter(Boolean);
+        if (!list.length) return '';
+        return `
+            <div class="ocp-channel-dialog-block ocp-channel-dialog-context">
+                <div class="ocp-card-title">${esc(options.title || '接入状态')}</div>
+                ${options.description ? `<div class="ocp-row-meta">${esc(options.description)}</div>` : ''}
+                <div class="ocp-channel-dialog-context-grid">
+                    ${list.map((item) => `
+                        <div class="ocp-channel-dialog-context-item tone-${esc(item.tone || 'muted')}">
+                            <div class="ocp-channel-dialog-context-label">${esc(item.label || '')}</div>
+                            <div class="ocp-channel-dialog-context-value">${esc(item.value || '')}</div>
+                            <div class="ocp-channel-dialog-context-detail">${esc(item.detail || '')}</div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    function renderChannelStateCards(state, channelName, options = {}) {
+        return renderChannelStatusGrid(getChannelStateDescriptors(state, channelName, options));
     }
 
     function getChannelMonogram(profile, channelName) {
@@ -1424,20 +1503,22 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
         const isConfigured = Object.keys(channelConfig).length > 0;
         const boundAgent = getBoundAgent(state.config, channelName);
         const actionLabel = getChannelActionButtonLabel(state, actionState, channelName);
-        const installedState = describeChannelInstalledState(actionState, probe);
-        const configuredState = describeChannelConfiguredState(channelName, channelConfig, actionState);
-        const connectionState = describeChannelConnectionState(state, channelName, channelConfig, actionState, probe);
+        const statusItems = getChannelStateDescriptors(state, channelName, {
+            profile,
+            channelConfig,
+            probe,
+            actionState
+        });
         const monogram = getChannelMonogram(profile, channelName);
-        const statusChips = [installedState, configuredState, connectionState].map((item) => `
-            <span class="ocp-pill ${esc(item.tone)}">${esc(item.label)} · ${esc(item.value)}</span>
-        `).join('');
-        const summaryLine = isConfigured
-            ? `绑定 Agent：${esc(boundAgent || 'main')}`
-            : esc(actionState.detail || '点击主按钮继续接入。');
-        const metaLine = esc(actionState.detail || profile.desc || '点击卡片查看渠道说明与当前状态。');
+        const actionSummary = actionState.detail || profile.desc || '点击主按钮继续接入。';
+        const helperSummary = isConfigured
+            ? `绑定 Agent：${boundAgent || 'main'}`
+            : '保存后会直接写入渠道配置并回到当前页。';
         const secondaryActions = isConfigured ? `
-            <button class="ocp-btn sm" data-channel-toggle="${esc(channelName)}">${channelConfig.enabled === false ? '启用' : '停用'}</button>
-            <button class="ocp-btn sm danger" data-channel-remove="${esc(channelName)}">移除</button>
+            <div class="ocp-channel-platform-utility">
+                <button class="ocp-btn sm" data-channel-toggle="${esc(channelName)}">${channelConfig.enabled === false ? '启用' : '停用'}</button>
+                <button class="ocp-btn sm danger" data-channel-remove="${esc(channelName)}">移除</button>
+            </div>
         ` : '';
 
         return `
@@ -1450,12 +1531,21 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                     </div>
                     <span class="ocp-pill ${actionState.tone}">${esc(actionState.badge || '待接入')}</span>
                 </div>
-                <div class="ocp-channel-platform-states">${statusChips}</div>
-                <div class="ocp-row-meta">${summaryLine}</div>
-                <div class="ocp-row-meta">${metaLine}</div>
-                <div class="ocp-channel-platform-actions">
-                    <button class="ocp-btn sm primary" data-channel-main-action="${esc(channelName)}" data-channel-main-kind="${esc(actionState.action)}" ${isInstallingChannelState(state, channelName) ? 'disabled' : ''}>${esc(actionLabel)}</button>
-                    ${secondaryActions}
+                <div class="ocp-channel-platform-intent tone-${esc(actionState.tone || 'info')}">
+                    <div class="ocp-channel-platform-intent-eyebrow">主操作</div>
+                    <div class="ocp-channel-platform-intent-title">${esc(actionLabel)}</div>
+                    <div class="ocp-channel-platform-intent-detail">${esc(actionSummary)}</div>
+                </div>
+                ${renderChannelStatusGrid(statusItems, { compact: true })}
+                <div class="ocp-channel-platform-footer">
+                    <div class="ocp-channel-platform-meta">
+                        <span class="ocp-channel-platform-meta-item">${esc(helperSummary)}</span>
+                        <span class="ocp-channel-platform-meta-item">${esc(actionState.hint || '主按钮保留给下一步动作，其余操作降级展示。')}</span>
+                    </div>
+                    <div class="ocp-channel-platform-actions">
+                        <button class="ocp-btn sm primary" data-channel-main-action="${esc(channelName)}" data-channel-main-kind="${esc(actionState.action)}" ${isInstallingChannelState(state, channelName) ? 'disabled' : ''}>${esc(actionLabel)}</button>
+                        ${secondaryActions}
+                    </div>
                 </div>
             </article>
         `;
@@ -1482,9 +1572,15 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                 <div class="ocp-channel-platform-pick-icon" aria-hidden="true">${esc(monogram)}</div>
                 <div class="ocp-channel-platform-pick-name">${esc(profile.label || channelName)}</div>
                 <div class="ocp-channel-platform-pick-desc">${esc(profile.desc || '选择模板后可直接开始填写接入参数。')}</div>
+                <div class="ocp-channel-platform-pick-intent tone-${esc(actionState.tone || 'info')}">
+                    <div class="ocp-channel-platform-intent-eyebrow">推荐入口</div>
+                    <div class="ocp-channel-platform-intent-title">${esc(actionLabel)}</div>
+                    <div class="ocp-channel-platform-intent-detail">${esc(actionState.detail || '选择模板后会直接进入接入流程。')}</div>
+                </div>
                 <div class="ocp-channel-platform-pick-badges">
                     ${badges.slice(0, 2).map((badge) => `<span class="ocp-pill ${esc(actionState.tone || 'muted')}">${esc(badge)}</span>`).join('')}
                 </div>
+                <div class="ocp-channel-platform-pick-meta">${esc(actionState.hint || '优先沿着模板流程填写、校验、保存。')}</div>
                 <button class="ocp-btn sm primary" data-channel-main-action="${esc(channelName)}" data-channel-main-kind="${esc(actionState.action || 'create')}" ${isInstallingChannelState(state, channelName) ? 'disabled' : ''}>${esc(actionLabel)}</button>
             </article>
         `;
@@ -1506,6 +1602,107 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                         : `<div class="ocp-empty">${esc(emptyText)}</div>`}
                 </div>
             </div>
+        `;
+    }
+
+    function renderChannelsOverview(state, options = {}) {
+        const channelKeys = ensureArray(options.channelKeys);
+        const availableListKeys = ensureArray(options.availableListKeys);
+        const allKeys = Array.from(new Set([...channelKeys, ...availableListKeys]));
+        const selectedChannel = options.selectedChannel || state.selected || '';
+        const selectedProfile = options.selectedProfile || getChannelProfile(selectedChannel);
+        const selectedActionState = options.selectedActionState || (selectedChannel
+            ? getChannelAccessActionState(state, selectedChannel, {
+                profile: selectedProfile,
+                channelConfig: ensureObject(state.config?.channels?.[selectedChannel]),
+                probe: getChannelAccessProbe(state, selectedChannel)
+            })
+            : null);
+        const selectedStateItems = selectedChannel
+            ? getChannelStateDescriptors(state, selectedChannel, {
+                profile: selectedProfile,
+                channelConfig: ensureObject(state.config?.channels?.[selectedChannel]),
+                probe: getChannelAccessProbe(state, selectedChannel),
+                actionState: selectedActionState
+            })
+            : [];
+        const pendingCount = allKeys.reduce((count, key) => {
+            const actionState = getChannelAccessActionState(state, key, {
+                profile: getChannelProfile(key),
+                channelConfig: ensureObject(state.config?.channels?.[key]),
+                probe: getChannelAccessProbe(state, key)
+            });
+            return ['missing', 'repair', 'needs-config', 'ready'].includes(actionState.state) ? count + 1 : count;
+        }, 0);
+        const connectedCount = channelKeys.reduce((count, key) => {
+            const channelConfig = ensureObject(state.config?.channels?.[key]);
+            const probe = getChannelAccessProbe(state, key);
+            const actionState = getChannelAccessActionState(state, key, {
+                profile: getChannelProfile(key, channelConfig),
+                channelConfig,
+                probe
+            });
+            const connection = describeChannelConnectionState(state, key, channelConfig, actionState, probe);
+            return /已绑定|已连接/.test(connection.value) ? count + 1 : count;
+        }, 0);
+
+        return `
+            <section class="ocp-card ocp-channel-overview">
+                <div class="ocp-channel-overview-head">
+                    <div class="ocp-channel-overview-copy">
+                        <div class="ocp-channel-surface-eyebrow">Overview</div>
+                        <div class="ocp-card-title">接入总览</div>
+                        <div class="ocp-row-meta">先确认当前页最重要的下一步，再进入具体接入工具的编辑、安装或扫码流程。</div>
+                    </div>
+                    <div class="ocp-channel-overview-actions">
+                        <button class="ocp-btn primary" id="channelsAddBtn">新建渠道</button>
+                        <button class="ocp-btn" id="channelsReloadBtn">刷新</button>
+                    </div>
+                </div>
+                <div class="ocp-channel-overview-grid">
+                    <div class="ocp-stat-card ocp-channel-overview-stat">
+                        <span>已写入配置</span>
+                        <strong>${esc(String(channelKeys.length))}</strong>
+                        <div class="ocp-row-meta">当前已经保存到配置文件的渠道数量。</div>
+                    </div>
+                    <div class="ocp-stat-card ocp-channel-overview-stat">
+                        <span>待处理渠道</span>
+                        <strong>${esc(String(pendingCount))}</strong>
+                        <div class="ocp-row-meta">包含待安装、待补全、待绑定和环境异常。</div>
+                    </div>
+                    <div class="ocp-stat-card ocp-channel-overview-stat">
+                        <span>已确认连接</span>
+                        <strong>${esc(String(connectedCount))}</strong>
+                        <div class="ocp-row-meta">已经确认绑定或连接成功的渠道数量。</div>
+                    </div>
+                    <div class="ocp-stat-card ocp-channel-overview-stat">
+                        <span>可新增模板</span>
+                        <strong>${esc(String(availableListKeys.length))}</strong>
+                        <div class="ocp-row-meta">还没有写入配置、可以直接开始的新渠道模板。</div>
+                    </div>
+                </div>
+                <div class="ocp-channel-overview-focus ${selectedChannel ? '' : 'is-empty'}">
+                    ${selectedChannel ? `
+                        <div class="ocp-channel-overview-focus-copy">
+                            <div class="ocp-channel-platform-intent tone-${esc(selectedActionState?.tone || 'info')}">
+                                <div class="ocp-channel-platform-intent-eyebrow">当前选中</div>
+                                <div class="ocp-channel-platform-intent-title">${esc(selectedProfile.label || selectedChannel)}</div>
+                                <div class="ocp-channel-platform-intent-detail">${esc(selectedActionState?.detail || selectedProfile.desc || '继续处理当前渠道。')}</div>
+                            </div>
+                            <div class="ocp-channel-overview-next">
+                                <div class="ocp-row-meta">推荐下一步</div>
+                                <div class="ocp-channel-overview-next-title">${esc(selectedActionState?.button || '继续')}</div>
+                                <div class="ocp-row-meta">${esc(selectedActionState?.hint || '主按钮只负责推进下一步，次要操作会留在卡片内部。')}</div>
+                            </div>
+                        </div>
+                        <div class="ocp-channel-overview-focus-status">
+                            ${renderChannelStatusGrid(selectedStateItems, { compact: true })}
+                        </div>
+                    ` : `
+                        <div class="ocp-empty">点击任意接入工具卡片后，这里会显示当前渠道的状态摘要和推荐下一步。</div>
+                    `}
+                </div>
+            </section>
         `;
     }
 
@@ -1667,6 +1864,12 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                     ${esc(options.banner.text)}
                 </div>
             `);
+        }
+        if (ensureArray(options.contextItems).length) {
+            topBlocks.push(buildChannelDialogContextBlock(options.contextItems, {
+                title: options.contextTitle,
+                description: options.contextDescription
+            }));
         }
         if (options.showGuide !== false) {
             topBlocks.push(buildChannelGuideBlock(profile, { collapsed: options.guideCollapsed }));
@@ -2599,6 +2802,9 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             const runtimeActive = (snapshot?.status === 'running')
                 || isWeixinRuntimeLocallyActive('checking')
                 || isWeixinRuntimeLocallyActive('login');
+            const elapsedMs = runtimeActive
+                ? Math.max(0, Date.now() - Number(snapshot?.startedAt || state.weixinLoginStartedAt || Date.now()))
+                : 0;
             const runningWithoutLogs = runtimeActive && !logPreview;
             const runningWithoutArtifacts = runtimeActive
                 && !String(state.weixinLoginLink || '').trim()
@@ -2637,10 +2843,199 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             return {
                 snapshot,
                 logPreview,
+                runtimeActive,
+                elapsedMs,
                 linkPlaceholder,
                 qrPlaceholder,
                 logPlaceholder
             };
+        }
+
+        function getWeixinRuntimeStageCopy(options = {}) {
+            const hasLink = Boolean(String(options.link || '').trim());
+            const phase = String(state.weixinLoginPhase || 'idle').trim();
+            const runtimeActive = Boolean(options.runtimeActive);
+            const elapsedMs = Math.max(0, Number(options.elapsedMs || 0));
+
+            if (phase === 'success') {
+                return {
+                    tone: 'success',
+                    badge: '已接入',
+                    title: '个人微信已经接入完成',
+                    detail: '当前不需要继续扫码；如果后续要重绑，再点击上方按钮重新生成二维码。'
+                };
+            }
+            if (phase === 'scanned') {
+                return {
+                    tone: 'success',
+                    badge: '已扫码',
+                    title: '已检测到扫码动作，请在手机上确认',
+                    detail: '确认完成后，界面会继续检查连接状态；如果长时间没变化，可以点“检查状态”。'
+                };
+            }
+            if (phase === 'checking') {
+                return {
+                    tone: 'info',
+                    badge: '确认中',
+                    title: '正在检查微信是否已经接入成功',
+                    detail: '这一步不会生成新的二维码。请等待结果，或在必要时重新发起扫码。'
+                };
+            }
+            if (phase === 'installing') {
+                return {
+                    tone: 'info',
+                    badge: '运行中',
+                    title: '正在准备插件或自动接入流程',
+                    detail: '如果是自动安装流，二维码会在安装器准备完成后出现在这里；当前不是卡住，而是在继续运行。'
+                };
+            }
+            if (phase === 'failure' || phase === 'expired') {
+                return {
+                    tone: 'danger',
+                    badge: phase === 'expired' ? '已过期' : '失败',
+                    title: phase === 'expired' ? '二维码已过期，需要重新生成' : '这次扫码没有确认成功',
+                    detail: '可以重新点击“扫描接入微信”；如果手机上已经操作过，也可以先点“检查状态”。'
+                };
+            }
+            if (hasLink) {
+                return {
+                    tone: 'info',
+                    badge: '请扫码',
+                    title: '请直接扫描下方二维码接入微信',
+                    detail: '二维码和扫码链接已经准备好，直接用微信扫描；扫码后继续看这里的状态变化。'
+                };
+            }
+            if (runtimeActive) {
+                if (elapsedMs >= 5000) {
+                    return {
+                        tone: 'warning',
+                        badge: '未回显',
+                        title: 'CLI 还没返回二维码，但命令仍在运行',
+                        detail: '这不是页面卡住。当前只收到了启动级日志，你可以继续等待几秒，或直接点击“检查状态”。'
+                    };
+                }
+                return {
+                    tone: 'info',
+                    badge: '生成中',
+                    title: '正在生成二维码，请直接看这个区域',
+                    detail: '命令已经启动，当前还没有回显二维码时，这里会持续显示运行状态，不代表页面卡住。'
+                };
+            }
+            return {
+                tone: 'muted',
+                badge: '未开始',
+                title: '点击上方“扫描接入微信”开始接入',
+                detail: '扫码按钮点下去以后，二维码、链接和运行状态都会显示在这里。'
+            };
+        }
+
+        function shouldShowWeixinDialogRuntimeWindow(options = {}) {
+            const phase = String(options.phase || state.weixinLoginPhase || 'idle').trim();
+            if (phase && phase !== 'idle') return true;
+            if (options.runtimeActive) return true;
+            return Boolean(options.hasRuntimeArtifacts);
+        }
+
+        function getWeixinDialogRuntimeWindowState(options = {}) {
+            const phase = String(options.phase || state.weixinLoginPhase || 'idle').trim();
+            const hasQr = Boolean(String(options.qr || '').trim());
+            const hasLink = Boolean(String(options.link || '').trim());
+            const runtimeActive = Boolean(options.runtimeActive);
+            const elapsedMs = Math.max(0, Number(options.elapsedMs || 0));
+
+            if (phase === 'success') {
+                return {
+                    tone: 'success',
+                    title: '接入完成',
+                    label: '已完成',
+                    percent: 100
+                };
+            }
+            if (phase === 'failure') {
+                return {
+                    tone: 'danger',
+                    title: '执行失败',
+                    label: '失败',
+                    percent: 100
+                };
+            }
+            if (phase === 'expired') {
+                return {
+                    tone: 'warning',
+                    title: '二维码已过期',
+                    label: '过期',
+                    percent: 100
+                };
+            }
+            if (phase === 'checking') {
+                return {
+                    tone: 'info',
+                    title: '正在执行',
+                    label: '确认中',
+                    percent: 96
+                };
+            }
+            if (phase === 'scanned') {
+                return {
+                    tone: 'success',
+                    title: '正在执行',
+                    label: '已扫码',
+                    percent: 96
+                };
+            }
+            if (phase === 'waiting-scan') {
+                if (hasQr || hasLink) {
+                    return {
+                        tone: 'info',
+                        title: '正在执行',
+                        label: '请扫码',
+                        percent: 90
+                    };
+                }
+                if (runtimeActive && elapsedMs >= 5000) {
+                    return {
+                        tone: 'warning',
+                        title: '正在执行',
+                        label: '等待回显',
+                        percent: 42
+                    };
+                }
+                return {
+                    tone: 'info',
+                    title: '正在执行',
+                    label: '启动中',
+                    percent: 36
+                };
+            }
+            if (phase === 'installing') {
+                return {
+                    tone: 'info',
+                    title: '正在执行',
+                    label: '执行中',
+                    percent: state.weixinLoginFlow === 'install' ? 28 : 34
+                };
+            }
+            return {
+                tone: 'muted',
+                title: '等待执行',
+                label: '待开始',
+                percent: 0
+            };
+        }
+
+        function scrollWeixinDialogRuntimeIntoView(options = {}) {
+            const modal = getWeixinDialogModal();
+            if (!modal) return;
+            const target = modal.querySelector('[data-role="weixin-runtime-section"]') || modal.querySelector('[data-role="weixin-runtime-qr"]');
+            if (!target) return;
+            try {
+                target.scrollIntoView({
+                    behavior: options.instant === true ? 'auto' : 'smooth',
+                    block: 'start'
+                });
+            } catch (_) {
+                target.scrollIntoView();
+            }
         }
 
         function getWeixinDialogModal() {
@@ -2672,6 +3067,23 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             };
         }
 
+        function getChannelsSmokeApiOverride(name) {
+            const overrides = ensureObject(window.__openclawSmokeApiOverrides);
+            const candidate = overrides?.[name];
+            return typeof candidate === 'function' ? candidate : null;
+        }
+
+        async function invokeChannelsApi(name, ...args) {
+            const override = getChannelsSmokeApiOverride(name);
+            if (override) {
+                return await override(...args);
+            }
+            if (typeof window.api?.[name] !== 'function') {
+                return null;
+            }
+            return await window.api[name](...args);
+        }
+
         async function persistWeixinDialogConfig(channelName, modal, dialogApi = null, options = {}) {
             const statusApi = createDialogStatusProxy(modal, dialogApi);
             if (!(await ensureChannelInstalledBeforeSave(channelName, statusApi))) {
@@ -2686,7 +3098,7 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             next.channels[channelName] = serializeChannelDraft(channelName, currentConfig, draft);
             setSingleChannelBinding(next, channelName, String(values.agentBinding || '__unbound__'));
 
-            const result = await window.api.writeOpenClawConfig(next);
+            const result = await invokeChannelsApi('writeOpenClawConfig', next);
             if (!result?.ok) throw new Error(result?.error || '保存失败');
 
             state.config = next;
@@ -2713,11 +3125,19 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             const installBtn = modal.querySelector('[data-role="weixin-dialog-install"]');
             const loginBtn = modal.querySelector('[data-role="weixin-dialog-login"]');
             const checkBtn = modal.querySelector('[data-role="weixin-dialog-status-check"]');
+            const runtimeSectionEl = modal.querySelector('[data-role="weixin-runtime-section"]');
             const runtimeSummaryEl = modal.querySelector('[data-role="weixin-runtime-summary"]');
             const runtimeDetailEl = modal.querySelector('[data-role="weixin-runtime-detail"]');
             const runtimeLinkEl = modal.querySelector('[data-role="weixin-runtime-link"]');
             const runtimeQrEl = modal.querySelector('[data-role="weixin-runtime-qr"]');
             const runtimeLogEl = modal.querySelector('[data-role="weixin-runtime-log"]');
+            const runtimeBadgeEl = modal.querySelector('[data-role="weixin-runtime-badge"]');
+            const runtimeWindowTitleEl = modal.querySelector('[data-role="weixin-runtime-window-title"]');
+            const runtimeProgressPercentEl = modal.querySelector('[data-role="weixin-runtime-progress-percent"]');
+            const runtimeProgressFillEl = modal.querySelector('[data-role="weixin-runtime-progress-fill"]');
+            const runtimeGuideTitleEl = modal.querySelector('[data-role="weixin-runtime-guide-title"]');
+            const runtimeGuideDetailEl = modal.querySelector('[data-role="weixin-runtime-guide-detail"]');
+            const runtimeScanCopyEl = modal.querySelector('[data-role="weixin-runtime-scan-copy"]');
             const statusField = modal.querySelector('[data-field="status"]');
             const plugin = ensureObject(state.weixinPluginStatus);
             const runtimeDisplay = getWeixinRuntimeDisplayState();
@@ -2725,6 +3145,7 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             const visibleLoginLink = state.weixinLoginLink || extractLatestLoginLink(runtimeLogSource);
             const visibleAsciiQr = state.weixinLoginAsciiQr || extractLatestAsciiQr(runtimeLogSource);
             const runtimeLogPreview = runtimeDisplay.logPreview;
+            const runtimeActive = Boolean(runtimeDisplay.runtimeActive);
             const currentConfig = ensureObject(state.config?.channels?.[state.selected]);
             const hasSavedConfig = Object.keys(currentConfig).length > 0;
             const hasRuntimeArtifacts = Boolean(
@@ -2732,6 +3153,28 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                 || String(visibleAsciiQr || '').trim()
                 || runtimeLogPreview
             );
+            const runtimeStageCopy = getWeixinRuntimeStageCopy({
+                link: visibleLoginLink,
+                runtimeActive,
+                elapsedMs: runtimeDisplay.elapsedMs
+            });
+            const runtimeWindowState = getWeixinDialogRuntimeWindowState({
+                phase: state.weixinLoginPhase,
+                runtimeActive,
+                elapsedMs: runtimeDisplay.elapsedMs,
+                link: visibleLoginLink,
+                qr: visibleAsciiQr
+            });
+            const userFacingRuntimeLog = buildWeixinUserFacingRuntimeLog(runtimeLogSource, {
+                runtimeActive,
+                elapsedMs: runtimeDisplay.elapsedMs,
+                phase: state.weixinLoginPhase
+            });
+            const showRuntimeWindow = shouldShowWeixinDialogRuntimeWindow({
+                phase: state.weixinLoginPhase,
+                runtimeActive,
+                hasRuntimeArtifacts
+            });
 
             if (pluginStatusEl) {
                 if (state.weixinPluginStatusLoading) {
@@ -2767,6 +3210,11 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                     ? '升级到兼容版'
                     : (plugin.installed && plugin.updateAvailable ? '升级插件' : '安装插件');
             }
+            if (loginBtn) {
+                loginBtn.textContent = isWeixinBindingComplete(state.selected)
+                    ? '重新扫描接入微信'
+                    : '扫描接入微信';
+            }
 
             const isRunning = Boolean(
                 runtimeDisplay.snapshot?.status === 'running'
@@ -2801,7 +3249,15 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                     ? plugin.compatibilityIssue
                     : isWeixinBindingComplete(state.selected)
                     ? '当前个人微信 V1 已完成接入；如需重绑，可重新执行扫码登录。'
-                    : '安装插件、升级插件、扫码登录都可以直接在这个窗口完成。';
+                    : runtimeActive && !hasRuntimeArtifacts && runtimeDisplay.elapsedMs >= 5000
+                        ? '命令仍在运行，但 CLI 暂未回显二维码；这不是页面卡住，可以继续等待，或直接点击“检查状态”。'
+                        : '点击“扫描接入微信”后，当前窗口会直接展开运行日志和二维码区域。';
+            }
+            if (runtimeSectionEl) {
+                runtimeSectionEl.className = `ocp-channel-dialog-block ocp-channel-runtime-window ${showRuntimeWindow ? 'is-visible' : 'is-hidden'} tone-${runtimeWindowState.tone || 'muted'}`;
+            }
+            if (runtimeWindowTitleEl) {
+                runtimeWindowTitleEl.textContent = runtimeWindowState.title || '正在执行';
             }
             if (runtimeSummaryEl) {
                 runtimeSummaryEl.textContent = state.weixinLoginSummary || '等待操作';
@@ -2809,14 +3265,47 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             if (runtimeDetailEl) {
                 runtimeDetailEl.textContent = state.weixinLoginDetail || '日志、二维码和状态会在这里实时更新。';
             }
+            if (runtimeProgressPercentEl) {
+                runtimeProgressPercentEl.textContent = `${Math.max(0, Math.min(100, Number(runtimeWindowState.percent || 0)))}%`;
+            }
+            if (runtimeProgressFillEl) {
+                runtimeProgressFillEl.style.width = `${Math.max(0, Math.min(100, Number(runtimeWindowState.percent || 0)))}%`;
+            }
+            if (runtimeBadgeEl) {
+                runtimeBadgeEl.className = `ocp-pill ${esc(runtimeStageCopy.tone || 'muted')}`;
+                runtimeBadgeEl.textContent = runtimeStageCopy.badge || '等待操作';
+            }
+            if (runtimeGuideTitleEl) {
+                runtimeGuideTitleEl.textContent = runtimeStageCopy.title || '点击上方按钮开始扫码';
+            }
+            if (runtimeGuideDetailEl) {
+                runtimeGuideDetailEl.textContent = runtimeStageCopy.detail || '二维码、扫码链接和运行状态会在这里继续显示。';
+            }
+            if (runtimeScanCopyEl) {
+                runtimeScanCopyEl.textContent = visibleLoginLink
+                    ? '二维码已经准备好，请直接使用微信扫描下方图片。'
+                    : runtimeDisplay.qrPlaceholder;
+            }
             if (runtimeLinkEl) {
                 if (visibleLoginLink) {
                     runtimeLinkEl.innerHTML = `
-                        <div class="ocp-row-meta">${esc(visibleLoginLink)}</div>
-                        <a class="ocp-link-button" href="${esc(visibleLoginLink)}" target="_blank" rel="noreferrer">打开扫码链接</a>
+                        <div class="ocp-channel-runtime-link-copy">如果二维码未能成功展示，请用浏览器打开以下链接扫码：</div>
+                        <a class="ocp-channel-runtime-link-url" href="${esc(visibleLoginLink)}" target="_blank" rel="noreferrer">${esc(visibleLoginLink)}</a>
+                        <div class="ocp-channel-runtime-link-status">${esc(
+                            state.weixinLoginPhase === 'scanned'
+                                ? '已检测到扫码，等待手机确认...'
+                                : state.weixinLoginPhase === 'checking'
+                                    ? '正在确认连接结果...'
+                                    : '等待连接结果...'
+                        )}</div>
                     `;
                 } else {
-                    runtimeLinkEl.innerHTML = `<div class="ocp-empty">${esc(runtimeDisplay.linkPlaceholder)}</div>`;
+                    runtimeLinkEl.innerHTML = `
+                        <div class="ocp-channel-runtime-link-copy">${esc(runtimeDisplay.linkPlaceholder)}</div>
+                        <div class="ocp-channel-runtime-link-status">${esc(
+                            runtimeActive ? '命令正在运行，等待连接结果...' : '等待你点击“扫描接入微信”后开始执行。'
+                        )}</div>
+                    `;
                 }
             }
             if (runtimeQrEl) {
@@ -2827,19 +3316,18 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                 });
             }
             if (runtimeLogEl) {
-                runtimeLogEl.textContent = runtimeLogPreview
-                    ? runtimeLogPreview.split('\n').slice(-120).join('\n')
-                    : runtimeDisplay.logPlaceholder;
+                runtimeLogEl.textContent = userFacingRuntimeLog
+                    || runtimeDisplay.logPlaceholder;
             }
             void ensureWeixinLinkImageQr(visibleLoginLink);
         }
 
         async function refreshWeixinPluginStatus(options = {}) {
-            if (typeof window.api?.checkWeixinPluginStatus !== 'function') return null;
+            if (typeof window.api?.checkWeixinPluginStatus !== 'function' && !getChannelsSmokeApiOverride('checkWeixinPluginStatus')) return null;
             state.weixinPluginStatusLoading = true;
             refreshWeixinDialogRuntimeUI();
             try {
-                const status = await window.api.checkWeixinPluginStatus({
+                const status = await invokeChannelsApi('checkWeixinPluginStatus', {
                     includeLatestVersion: options.includeLatestVersion !== false,
                     refresh: options.refresh === true
                 });
@@ -2870,9 +3358,12 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
 
             if (installBtn) {
                 installBtn.onclick = async () => {
-                    if (installBtn.disabled) return;
-                    if (actionStatusEl) {
-                        actionStatusEl.textContent = '正在执行官方自动安装流，稍后会直接生成扫码二维码...';
+                    const currentModal = getWeixinDialogModal() || modal;
+                    const currentInstallBtn = currentModal?.querySelector('[data-role="weixin-dialog-install"]') || installBtn;
+                    const currentActionStatusEl = currentModal?.querySelector('[data-role="weixin-action-status"]') || actionStatusEl;
+                    if (currentInstallBtn?.disabled) return;
+                    if (currentActionStatusEl) {
+                        currentActionStatusEl.textContent = '正在执行官方自动安装流，稍后会直接生成扫码二维码...';
                     }
                     const started = beginWeixinLoginFlow(
                         'auto',
@@ -2880,36 +3371,66 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                         '个人微信自动安装与扫码接入',
                         '正在执行个人微信官方自动安装流；它会自动安装或升级插件、输出二维码，并在扫码成功后自动重启 Gateway。'
                     );
-                    if (!started && actionStatusEl) {
-                        actionStatusEl.textContent = '个人微信自动安装流未能启动，请检查当前命令桥接或稍后重试。';
+                    if (!started && currentActionStatusEl) {
+                        currentActionStatusEl.textContent = '个人微信自动安装流未能启动，请检查当前命令桥接或稍后重试。';
                     }
                     refreshWeixinDialogRuntimeUI();
+                    scrollWeixinDialogRuntimeIntoView();
                 };
             }
 
             if (loginBtn) {
                 loginBtn.onclick = async () => {
-                    if (loginBtn.disabled) return;
-                    const pluginStatus = state.weixinPluginStatus || await refreshWeixinPluginStatus();
+                    const currentModal = getWeixinDialogModal() || modal;
+                    const currentLoginBtn = currentModal?.querySelector('[data-role="weixin-dialog-login"]') || loginBtn;
+                    const currentActionStatusEl = currentModal?.querySelector('[data-role="weixin-action-status"]') || actionStatusEl;
+                    if (currentLoginBtn?.disabled) return;
+                    const pluginStatus = await refreshWeixinPluginStatus({
+                        refresh: true,
+                        includeLatestVersion: false
+                    });
                     if (pluginStatus?.compatibilityIssue) {
-                        if (actionStatusEl) {
-                            actionStatusEl.textContent = pluginStatus.compatibilityIssue;
+                        if (currentActionStatusEl) {
+                            currentActionStatusEl.textContent = pluginStatus.compatibilityIssue;
                         }
                         return;
                     }
                     if (!pluginStatus?.installed) {
-                        if (actionStatusEl) {
-                            actionStatusEl.textContent = '请先安装个人微信插件，再执行扫码登录。';
+                        if (currentActionStatusEl) {
+                            currentActionStatusEl.textContent = '请先安装个人微信插件，再执行扫码登录。';
                         }
                         return;
                     }
+                    updateWeixinLoginView({
+                        weixinLoginFlow: 'manual',
+                        weixinLoginPhase: 'installing',
+                        weixinLoginSummary: '正在准备扫码登录',
+                        weixinLoginDetail: '正在保存接入配置并准备生成二维码，当前窗口会继续显示执行进度。',
+                        weixinLoginRawLog: buildWeixinRuntimeLog(
+                            '',
+                            '[扫码登录] 已收到扫码指令，正在保存接入配置并准备生成二维码...'
+                        ),
+                        weixinLoginStartedAt: Date.now(),
+                        weixinStatusCheckRawLog: '',
+                        weixinStatusCheckSessionId: '',
+                        weixinLoginExpired: false,
+                        weixinLoginFinished: false
+                    });
+                    refreshWeixinDialogRuntimeUI();
+                    scrollWeixinDialogRuntimeIntoView({ instant: true });
                     try {
-                        const savedConfig = await persistWeixinDialogConfig(channelName, modal, null, { refresh: true });
+                        const savedConfig = await persistWeixinDialogConfig(channelName, currentModal, null, { refresh: false });
                         if (!savedConfig) {
+                            updateWeixinLoginView({
+                                weixinLoginPhase: 'idle',
+                                weixinLoginSummary: '等待扫码接入',
+                                weixinLoginDetail: '接入配置尚未保存完成，请先处理上方提示后再继续扫码。'
+                            });
+                            refreshWeixinDialogRuntimeUI();
                             return;
                         }
-                        if (actionStatusEl) {
-                            actionStatusEl.textContent = '已保存接入配置，正在生成扫码二维码...';
+                        if (currentActionStatusEl) {
+                            currentActionStatusEl.textContent = '已保存接入配置，正在生成扫码二维码...';
                         }
                         beginWeixinLoginFlow(
                             'manual',
@@ -2917,10 +3438,17 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                             '个人微信扫码登录',
                             '正在执行参考项目同款扫码登录命令，请直接在当前窗口查看二维码并使用微信扫码。'
                         );
+                        void refreshChannelAccessStates({ selectedOnly: true, background: true }).catch(() => {});
                         refreshWeixinDialogRuntimeUI();
+                        scrollWeixinDialogRuntimeIntoView();
                     } catch (error) {
-                        if (actionStatusEl) {
-                            actionStatusEl.textContent = error?.message || String(error);
+                        updateWeixinLoginView({
+                            weixinLoginPhase: 'failure',
+                            weixinLoginSummary: '扫码准备失败',
+                            weixinLoginDetail: error?.message || String(error)
+                        });
+                        if (currentActionStatusEl) {
+                            currentActionStatusEl.textContent = error?.message || String(error);
                         }
                     }
                 };
@@ -2928,19 +3456,26 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
 
             if (checkBtn) {
                 checkBtn.onclick = async () => {
-                    if (checkBtn.disabled) return;
-                    const pluginStatus = state.weixinPluginStatus || await refreshWeixinPluginStatus();
+                    const currentModal = getWeixinDialogModal() || modal;
+                    const currentCheckBtn = currentModal?.querySelector('[data-role="weixin-dialog-status-check"]') || checkBtn;
+                    const currentActionStatusEl = currentModal?.querySelector('[data-role="weixin-action-status"]') || actionStatusEl;
+                    if (currentCheckBtn?.disabled) return;
+                    const pluginStatus = await refreshWeixinPluginStatus({
+                        refresh: true,
+                        includeLatestVersion: false
+                    });
                     if (pluginStatus?.compatibilityIssue) {
-                        if (actionStatusEl) {
-                            actionStatusEl.textContent = pluginStatus.compatibilityIssue;
+                        if (currentActionStatusEl) {
+                            currentActionStatusEl.textContent = pluginStatus.compatibilityIssue;
                         }
                         return;
                     }
-                    if (actionStatusEl) {
-                        actionStatusEl.textContent = '正在检查当前个人微信连接状态...';
+                    if (currentActionStatusEl) {
+                        currentActionStatusEl.textContent = '正在检查当前个人微信连接状态...';
                     }
                     runWeixinStatusCheck('manual');
                     refreshWeixinDialogRuntimeUI();
+                    scrollWeixinDialogRuntimeIntoView();
                 };
             }
         }
@@ -2993,13 +3528,6 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                         value: getBoundAgent(state.config, channelName) || '__unbound__',
                         options: agentOptions,
                         hint: '当前 V1 只保留最小接入能力；后续如需多账号会在 V2 扩展。'
-                    },
-                    {
-                        name: 'status',
-                        label: '当前接入状态',
-                        value: bindingComplete ? '微信已接入' : (configured ? '等待扫码绑定' : '等待写入接入配置'),
-                        readonly: true,
-                        hint: '安装插件、升级插件、扫码登录都可以直接在当前弹窗里完成。'
                     }
                 ];
 
@@ -3032,30 +3560,62 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             if (modal) {
                 modal.dataset.channelDialogKind = 'weixin';
                 modal.dataset.channelKey = channelName;
+                if (mode !== 'success') {
+                    const firstField = modal.querySelector('.ocp-dialog-field');
+                    firstField?.insertAdjacentHTML('beforebegin', `
+                        <div class="ocp-channel-dialog-block ocp-channel-dialog-primary-entry">
+                            <div class="ocp-card-title">扫码接入</div>
+                            <div class="ocp-row-meta">先点击下面这个主按钮开始接入微信。二维码会直接显示在当前窗口，不需要跳转到别的页面。</div>
+                            <div class="ocp-channel-dialog-primary-action">
+                                <button type="button" class="ocp-dialog-btn primary ocp-channel-dialog-scan-btn" data-role="weixin-dialog-login">扫描接入微信</button>
+                                <div class="ocp-row-meta">如果按钮不可用，先看下方“插件状态”和“辅助操作”中的安装提示。</div>
+                            </div>
+                        </div>
+                    `);
+                }
                 const statusEl = modal.querySelector('[data-role="status"]');
                 statusEl?.insertAdjacentHTML('beforebegin', `
-                    <div data-role="channel-dialog-bottom">
+                    <div data-role="weixin-dialog-bottom">
                         <div class="ocp-channel-dialog-block">
                             <div class="ocp-card-title">插件状态</div>
                             <div class="ocp-row-meta" data-role="weixin-plugin-status">正在检测个人微信插件状态...</div>
                         </div>
                         <div class="ocp-channel-dialog-block">
-                            <div class="ocp-card-title">微信操作</div>
-                            <div class="ocp-row-meta">安装插件、升级插件、扫码登录都在这里直接执行，命令与参考项目保持一致。</div>
-                            <div class="ocp-channel-dialog-toolbar">
+                            <div class="ocp-card-title">辅助操作</div>
+                            <div class="ocp-row-meta">安装插件和检查状态放在这里，避免和主扫码入口混在一起。</div>
+                            <div class="ocp-channel-dialog-action-grid">
                                 <button type="button" class="ocp-dialog-btn" data-role="weixin-dialog-install">安装插件</button>
-                                <button type="button" class="ocp-dialog-btn primary" data-role="weixin-dialog-login">扫码登录</button>
                                 <button type="button" class="ocp-dialog-btn" data-role="weixin-dialog-status-check">检查状态</button>
                             </div>
-                            <div class="ocp-channel-dialog-result" data-role="weixin-action-status">安装插件、升级插件、扫码登录都可以直接在这个窗口完成。</div>
+                            <div class="ocp-channel-dialog-result" data-role="weixin-action-status">主入口已经移到上方“扫码接入”；这里只保留安装插件和状态确认。</div>
                         </div>
-                        <div class="ocp-channel-dialog-block">
-                            <div class="ocp-card-title">扫码日志</div>
+                        <div class="ocp-channel-dialog-block ocp-channel-runtime-window is-hidden tone-muted" data-role="weixin-runtime-section">
+                            <div class="ocp-channel-runtime-window-head">
+                                <div class="ocp-channel-runtime-window-copy">
+                                    <div class="ocp-card-title" data-role="weixin-runtime-window-title">正在执行</div>
+                                    <div class="ocp-row-meta" data-role="weixin-runtime-guide-title">点击“扫描接入微信”后，这里会展开执行窗口。</div>
+                                </div>
+                                <div class="ocp-channel-runtime-window-meta">
+                                    <span class="ocp-pill muted" data-role="weixin-runtime-badge">未开始</span>
+                                    <span class="ocp-row-meta" data-role="weixin-runtime-progress-percent">0%</span>
+                                </div>
+                            </div>
+                            <div class="ocp-channel-runtime-progress" aria-hidden="true">
+                                <div class="ocp-channel-runtime-progress-fill" data-role="weixin-runtime-progress-fill" style="width:0%"></div>
+                            </div>
+                            <div class="ocp-channel-runtime-guide" data-role="weixin-runtime-guide-detail">二维码、扫码链接和运行状态会在这里持续更新，不需要切到别的地方。</div>
                             <div class="ocp-row-meta" data-role="weixin-runtime-summary">等待操作</div>
                             <div class="ocp-row-meta" data-role="weixin-runtime-detail">日志、二维码和状态会在这里实时更新。</div>
-                            <div class="ocp-channel-login-surface">
-                                <div data-role="weixin-runtime-link" class="ocp-row-meta">扫码链接生成后会显示在这里。</div>
+                            <div class="ocp-channel-login-surface ocp-channel-runtime-output">
+                                <div class="ocp-channel-runtime-scan-head">
+                                    <div class="ocp-card-title">请扫这里</div>
+                                    <div class="ocp-row-meta" data-role="weixin-runtime-scan-copy">二维码生成后会直接显示在这里。</div>
+                                </div>
                                 <div data-role="weixin-runtime-qr"></div>
+                                <div data-role="weixin-runtime-link" class="ocp-channel-runtime-link-card">扫码链接生成后会显示在这里。</div>
+                                <div class="ocp-channel-runtime-log-head">
+                                    <div class="ocp-row-meta">运行状态</div>
+                                </div>
                                 <pre class="ocp-channel-login-log" data-role="weixin-runtime-log">等待操作日志输出...</pre>
                             </div>
                         </div>
@@ -3064,6 +3624,11 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                 attachWeixinDialogActions(channelName);
                 refreshWeixinDialogRuntimeUI();
                 deferChannelDialogWork(() => {
+                    const dialogStateItems = getChannelStateDescriptors(state, channelName, {
+                        profile: getChannelProfile(channelName, currentConfig),
+                        channelConfig: currentConfig,
+                        probe: getChannelAccessProbe(state, channelName)
+                    });
                     decorateChannelDialogModal(getChannelProfile(channelName, currentConfig), {
                         banner: {
                             tone: mode === 'success' ? 'success' : 'info',
@@ -3071,6 +3636,11 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                                 ? '当前个人微信 V1 已完成绑定，后续如需重绑可再次进入这个窗口。'
                                 : '参考 clawpanel-main 的消息渠道微信：安装插件、升级插件、扫码登录都收敛在这个编辑窗口里。'
                         },
+                        contextTitle: '当前状态',
+                        contextDescription: mode === 'success'
+                            ? '绑定完成后这里只保留复查和重绑入口，不再额外展开无关说明。'
+                            : '先确认插件和绑定状态，再决定是先安装、直接扫码，还是做状态确认。',
+                        contextItems: dialogStateItems,
                         showGuide: false,
                         pairingCache: state.pairingCache,
                         onSavePairingCache: savePairingToCache
@@ -3362,7 +3932,11 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             const rawLogPreview = runtimeLogSource
                 ? runtimeLogSource.split('\n').slice(-180).join('\n')
                 : runtimeDisplay.logPlaceholder;
-            const digestLog = buildWeixinLogDigest(runtimeLogSource);
+            const digestLog = buildWeixinUserFacingRuntimeLog(runtimeLogSource, {
+                runtimeActive: runtimeDisplay.runtimeActive,
+                elapsedMs: runtimeDisplay.elapsedMs,
+                phase: state.weixinLoginPhase
+            });
             const runtimeNotice = getWeixinRuntimeNoticeState(state);
             return `
                 <div class="ocp-card" style="margin-bottom:16px">
@@ -3710,10 +4284,10 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
         }
 
         async function ensureChannelInstalledBeforeSave(channelName, dialog) {
-            if (typeof window.api?.getChannelEnvironmentStatus !== 'function') {
+            if (typeof window.api?.getChannelEnvironmentStatus !== 'function' && !getChannelsSmokeApiOverride('getChannelEnvironmentStatus')) {
                 return true;
             }
-            const statusResult = await window.api.getChannelEnvironmentStatus({
+            const statusResult = await invokeChannelsApi('getChannelEnvironmentStatus', {
                 channel: channelName,
                 localOnly: true
             });
@@ -3810,6 +4384,11 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                 }
             });
             deferChannelDialogWork(() => {
+                const dialogStateItems = getChannelStateDescriptors(state, channelName, {
+                    profile,
+                    channelConfig: currentConfig,
+                    probe: getChannelAccessProbe(state, channelName)
+                });
                 decorateChannelDialogModal(profile, {
                     banner: {
                         tone: isConfigured ? 'info' : 'warning',
@@ -3817,6 +4396,9 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                             ? '当前渠道已存在配置，修改后会直接覆盖并保留已有绑定。'
                             : '当前渠道还未完成接入，建议先按引导核对字段，再保存。'
                     },
+                    contextTitle: '当前状态',
+                    contextDescription: '先确认环境、配置和连接状态，再决定是直接保存、先校验，还是回到主按钮继续补齐。',
+                    contextItems: dialogStateItems,
                     showGuide: false,
                     pairingChannel: isConfigured ? channelName : '',
                     pairingCache: state.pairingCache,
@@ -3970,7 +4552,32 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
                             ? '个人微信 V1 使用固定平台 ID，保存后会继续进入扫码接入流。'
                             : '先按模板补齐凭证和 Agent 绑定，再保存为新的消息渠道。'
                     },
+                    contextTitle: '接入节奏',
+                    contextDescription: '创建新渠道时只保留一个主完成动作，校验和模板说明作为辅助操作存在。',
+                    contextItems: [
+                        {
+                            label: '模板',
+                            value: profile.label || normalizedPreset,
+                            detail: profile.desc || '当前模板决定字段结构与接入方式。',
+                            tone: 'info'
+                        },
+                        {
+                            label: '下一步',
+                            value: isWeixinPersonalChannel(normalizedPreset) ? '安装并扫码' : '填写并校验',
+                            detail: isWeixinPersonalChannel(normalizedPreset)
+                                ? '保存后会继续进入个人微信扫码绑定，不会把你停留在空白页。'
+                                : '建议先补齐关键凭证，再用“校验凭证”确认后保存。',
+                            tone: 'warning'
+                        },
+                        {
+                            label: '保存后',
+                            value: '写入渠道配置',
+                            detail: '保存只会写入当前渠道和 Agent 绑定，不会触发额外的重型页面刷新。',
+                            tone: 'success'
+                        }
+                    ],
                     showGuide: true,
+                    guideCollapsed: true,
                     pairingCache: state.pairingCache,
                     onSavePairingCache: savePairingToCache
                 });
@@ -4343,10 +4950,18 @@ const WEIXIN_CHANNEL_STATUS_COMMAND = 'openclaw channels status --probe';
             container.innerHTML = `
                 <div class="ocp-shell">
                     ${renderHeader('通信接入', '统一管理消息渠道接入、Agent 绑定与配对审批。')}
-                    <div class="ocp-toolbar">
-                        <button class="ocp-btn primary" id="channelsAddBtn">新建渠道</button>
-                        <button class="ocp-btn" id="channelsReloadBtn">刷新</button>
-                        <span class="${statusClass(state.status ? 'info' : 'muted')}" id="channelsStatus">${esc(statusText)}</span>
+                    ${renderChannelsOverview(state, {
+                        channelKeys,
+                        availableListKeys,
+                        selectedChannel: state.selected,
+                        selectedProfile,
+                        selectedActionState
+                    })}
+                    <div class="ocp-toolbar ocp-channel-toolbar">
+                        <div class="ocp-channel-toolbar-copy">
+                            <div class="ocp-row-meta">页面状态</div>
+                            <span class="${statusClass(state.status ? 'info' : 'muted')}" id="channelsStatus">${esc(statusText || '已完成当前通信接入状态整理。')}</span>
+                        </div>
                     </div>
                     ${showWeixinConsole ? renderWeixinLoginConsoleCard() : (showInstallLog ? `
                         <div class="ocp-card" style="margin-bottom:16px">
