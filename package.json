@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix OpenClaw-Tools start",
+    "build": "npm --prefix OpenClaw-Tools run build"
+  }
+}

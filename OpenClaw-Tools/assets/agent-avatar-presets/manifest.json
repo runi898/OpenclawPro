@@ -1,0 +1,142 @@
+[
+  {
+    "id": "modern-manager",
+    "label": "现代经理",
+    "src": "pixel-avatar-01.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-consultant",
+    "label": "短发顾问",
+    "src": "pixel-avatar-02.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-hoodie",
+    "label": "绿色连帽",
+    "src": "pixel-avatar-03.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-analyst",
+    "label": "眼镜分析师",
+    "src": "pixel-avatar-04.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-ops",
+    "label": "耳机运营",
+    "src": "pixel-avatar-05.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-executor",
+    "label": "金发执行",
+    "src": "pixel-avatar-06.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-guard",
+    "label": "墨镜安保",
+    "src": "pixel-avatar-07.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-writer",
+    "label": "粉发写手",
+    "src": "pixel-avatar-08.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-qa",
+    "label": "银发测试",
+    "src": "pixel-avatar-09.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-captain",
+    "label": "帽子队长",
+    "src": "pixel-avatar-10.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-developer",
+    "label": "青发开发",
+    "src": "pixel-avatar-11.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "modern-planner",
+    "label": "棕发策划",
+    "src": "pixel-avatar-12.png",
+    "license": "CC0",
+    "sourceUrl": "https://opengameart.org/content/32-x-32-portraits"
+  },
+  {
+    "id": "animal-cat",
+    "label": "猫咪助手",
+    "src": "pixel-avatar-13.png",
+    "license": "CC0",
+    "sourceUrl": ""
+  },
+  {
+    "id": "animal-dog",
+    "label": "小狗助手",
+    "src": "pixel-avatar-14.png",
+    "license": "CC0",
+    "sourceUrl": ""
+  },
+  {
+    "id": "animal-rabbit",
+    "label": "兔子助手",
+    "src": "pixel-avatar-15.png",
+    "license": "CC0",
+    "sourceUrl": ""
+  },
+  {
+    "id": "animal-fox",
+    "label": "狐狸助手",
+    "src": "pixel-avatar-16.png",
+    "license": "CC0",
+    "sourceUrl": ""
+  },
+  {
+    "id": "animal-bear",
+    "label": "棕熊助手",
+    "src": "pixel-avatar-17.png",
+    "license": "CC0",
+    "sourceUrl": ""
+  },
+  {
+    "id": "animal-tiger",
+    "label": "老虎助手",
+    "src": "pixel-avatar-18.png",
+    "license": "CC0",
+    "sourceUrl": ""
+  },
+  {
+    "id": "animal-panda",
+    "label": "熊猫助手",
+    "src": "pixel-avatar-19.png",
+    "license": "CC0",
+    "sourceUrl": ""
+  },
+  {
+    "id": "animal-otter",
+    "label": "水獭助手",
+    "src": "pixel-avatar-20.png",
+    "license": "CC0",
+    "sourceUrl": ""
+  }
+]

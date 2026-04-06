@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenClaw 控制中心</title>
+    <script>
+        (function () {
+            const key = 'openclaw.theme.mode';
+            let preference = 'auto';
+            const resolveAutoTheme = () => {
+                const hour = new Date().getHours();
+                return hour >= 6 && hour < 18 ? 'light' : 'dark';
+            };
+            try {
+                const stored = localStorage.getItem(key);
+                if (stored === 'light' || stored === 'dark' || stored === 'auto') {
+                    preference = stored;
+                }
+            } catch (error) {}
+            const resolved = preference === 'auto' ? resolveAutoTheme() : preference;
+            document.documentElement.dataset.themeMode = preference;
+            document.documentElement.dataset.theme = resolved;
+            document.documentElement.style.colorScheme = resolved;
+        })();
+    </script>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="agent-orchestrator.css">
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar" id="appSidebar">
+            <div class="logo-area">
+                <div class="logo-row">
+                    <h2 class="logo-title">OpenClaw <span class="badge">Pro</span></h2>
+                </div>
+            </div>
+            <ul class="nav-links">
+                <li class="active" data-page="dashboard"><i class="icon">DB</i><span class="nav-text">首页</span></li>
+                <li data-page="chat"><i class="icon">AI</i><span class="nav-text">智能对话</span></li>
+                <li data-page="agents"><i class="icon">AG</i><span class="nav-text">Agent 管理</span></li>
+                <li data-page="models"><i class="icon">MOD</i><span class="nav-text">模型配置</span></li>
+                <li data-page="channels"><i class="icon">CH</i><span class="nav-text">通信接入</span></li>
+                <li data-page="memory"><i class="icon">MEM</i><span class="nav-text">记忆文件</span></li>
+                <li data-page="cron"><i class="icon">CRN</i><span class="nav-text">定时任务</span></li>
+                <li data-page="usage"><i class="icon">USE</i><span class="nav-text">使用情况</span></li>
+                <li data-page="commands"><i class="icon">CMD</i><span class="nav-text">指令大全</span></li>
+                <li data-page="gateway"><i class="icon">GW</i><span class="nav-text">网关配置</span></li>
+                <li data-page="logs"><i class="icon">LOG</i><span class="nav-text">日志查看</span></li>
+                <li data-page="settings"><i class="icon">CFG</i><span class="nav-text">系统配置</span></li>
+            </ul>
+        </aside>
+        <div class="sidebar-resizer" id="sidebarResizer" role="separator" aria-orientation="vertical" aria-label="调整导航栏宽度"></div>
+        <button class="sidebar-toggle sidebar-toggle-edge" id="sidebarToggleBtn" type="button" aria-label="折叠导航栏" aria-expanded="true" title="折叠导航栏">⟨</button>
+
+        <main class="main-content">
+            <header class="top-bar">
+                <div class="top-bar-search" id="topBarSearch">
+                    <div class="search-box">
+                        <span class="search-icon">/</span>
+                        <input type="text" id="globalSearch" placeholder="搜索指令、功能或关键词，例如 gateway">
+                        <span class="kbd-shortcut">Ctrl+K</span>
+                    </div>
+                </div>
+                <div class="top-bar-actions">
+                    <div class="theme-switch" role="group" aria-label="主题模式切换">
+                        <span class="theme-switch-label">主题</span>
+                        <button class="theme-switch-btn" type="button" data-theme-mode="light">日间</button>
+                        <button class="theme-switch-btn" type="button" data-theme-mode="dark">夜间</button>
+                        <button class="theme-switch-btn" type="button" data-theme-mode="auto">自动</button>
+                    </div>
+                </div>
+            </header>
+
+            <div class="view-container" id="viewContainer" style="flex: 1; position: relative;"></div>
+
+            <div class="terminal-panel" id="terminalPanel" style="display: none;">
+                <div class="terminal-header">
+                    <span>>_ 指令执行会话中心</span>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <button class="kill-cmd-btn" id="killCmdBtn" style="display:none; background:#e74c3c; color:#fff; border:none; padding:3px 10px; border-radius:4px; cursor:pointer; font-size:12px;" title="终止当前命令">停止</button>
+                        <button class="close-terminal-btn" id="closeTerminalBtn">X</button>
+                    </div>
+                </div>
+                <div class="terminal-toolbar">
+                    <div class="terminal-toolbar-group">
+                        <label class="terminal-toggle">
+                            <input type="checkbox" id="terminalAutoScroll" checked>
+                            <span>自动滚动</span>
+                        </label>
+                        <button class="terminal-ghost-btn" id="clearTerminalBtn">清空历史</button>
+                    </div>
+                    <div class="terminal-status-text" id="terminalStatusHint">暂无执行会话</div>
+                </div>
+                <div class="terminal-body" id="terminalBody">
+                    <div class="terminal-empty-state" id="terminalEmptyState">
+                        <div class="terminal-empty-title">这里会显示每一次命令执行会话</div>
+                        <div class="terminal-empty-desc">支持保留历史输出、交互式输入、快速终止和自动滚动。</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <div class="spotlight-overlay" id="spotlightOverlay" style="display: none;">
+            <div class="spotlight-modal">
+                <div class="spotlight-input-wrapper">
+                    <span class="spotlight-icon">+</span>
+                    <input type="text" id="spotlightInput" placeholder="输入 /拼音 /中文，快速查找指令并执行..." autocomplete="off">
+                </div>
+                <ul class="spotlight-results" id="spotlightResults"></ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="param-modal-overlay" id="paramModalOverlay" style="display: none;">
+        <div class="param-modal">
+            <h3 class="param-modal-title" id="paramModalTitle">配置参数</h3>
+            <p class="param-modal-desc" id="paramModalDesc">请输入该指令需要的参数值：</p>
+
+            <div style="position: relative;">
+                <input type="text" id="paramModalInput" class="param-modal-input" placeholder="输入后回车执行 / 输入关键字搜索...">
+                <ul id="paramDropdown" class="param-dropdown"></ul>
+            </div>
+
+            <div id="paramQuickSelectArea" class="param-quick-select" style="display: none;">
+                <span style="font-size: 0.8rem; color: #8b8b93; display: block; margin-bottom: 8px;">快捷选项（点击直接填入并执行）</span>
+                <div class="quick-tags" id="paramQuickTags"></div>
+            </div>
+
+            <div class="param-modal-actions">
+                <button class="param-btn param-btn-cancel" id="paramBtnCancel">取消执行</button>
+                <button class="param-btn param-btn-confirm" id="paramBtnConfirm">确认执行</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="commands.js"></script>
+    <script src="panel-pages.js"></script>
+    <script src="logs-page.js"></script>
+    <script src="settings-page.js"></script>
+    <script src="agent-orchestrator-helpers.js"></script>
+    <script src="agent-orchestrator-page.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

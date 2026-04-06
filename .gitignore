@@ -1,0 +1,19 @@
+# Root publish whitelist
+/*
+!/.gitignore
+!/package.json
+!/OpenClaw-Tools/
+
+# OpenClaw-Tools runtime/source only
+OpenClaw-Tools/node_modules/
+OpenClaw-Tools/dist/
+OpenClaw-Tools/package-lock.json
+OpenClaw-Tools/smoke-test.js
+OpenClaw-Tools/frontend-button-audit.js
+OpenClaw-Tools/main/smoke/
+
+# Generic local artifacts
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.log
